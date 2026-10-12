@@ -47,21 +47,37 @@ No real bearer secret is required by the local proxy; it replaces inbound author
 
 This path gives StarNet direct model inference through the Hermes/Nous account. It does **not** run a second Hermes agent loop, so StarNet remains the owner of tools, consent and orchestration. That is the desired first integration.
 
+On Aleph's host, `modules/home/hermes.nix` already installs the patched Hermes package into the Home Manager profile. The StarNet module therefore defaults to `${config.home.profileDirectory}/bin/hermes`; no Hermes derivation is rebuilt and no private module binding needs to be exported.
+
 ## Claude Code + the existing Z.ai/GLM policy
 
-The current StarNet `claude-cli` provider locates `claude` on PATH or accepts `STARNET_CLAUDE_BIN`. The Home Manager module in this branch can set the latter to a Nix-store Claude Code executable.
+The current StarNet `claude-cli` provider accepts `STARNET_CLAUDE_BIN`. Aleph's host already places Claude Code in the NixOS system profile as `claudeCode`, so StarNet can reuse `/run/current-system/sw/bin/claude` directly instead of threading the private flake binding into Home Manager.
 
 Aleph's host manages Claude Code through `/etc/claude-code/managed-settings.json`, an `apiKeyHelper`, and the Z.ai Anthropic-compatible endpoint. StarNet upstream normally gates `claude-cli` readiness on `claude auth status`, which can legitimately say signed out in this externally managed mode.
 
 Set:
 
 ```nix
+services.starnet.claudeCommand = "/run/current-system/sw/bin/claude";
 services.starnet.claudeExternalManagedAuth = true;
 ```
 
 The module then places a tiny bridge behind `STARNET_CLAUDE_BIN`. It answers only the readiness probe `claude auth status` with `authMethod = external-managed`; every real Claude invocation is `exec`'d unchanged into the existing Claude Code binary. The bridge never reads, stores or forwards a credential. Do not enable this option for Claude subscription stacking.
 
 First live probe should use the `sonnet` alias, not a hard-coded Anthropic release id. The host's managed Claude configuration is expected to map its default Sonnet family to GLM-5.3. Verify the actual reported model/backend before enabling unattended work.
+
+## Nix package policy
+
+The package uses `buildNpmPackage`, Node 22 and the repository lockfile. The npm dependency hash was resolved by GitHub Actions against this exact lockfile and is pinned in `nix/package.nix`.
+
+StarNet's dependency graph currently contains two generations of `onnxruntime-node`: the newer Transformers dependency and an older copy nested under `kokoro-js`. Both ship the CPU runtime but try to download CUDA/TensorRT binaries during installation on Linux/x64. The Nix derivation sets both documented skip variables:
+
+```text
+ONNXRUNTIME_NODE_INSTALL=skip
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip
+```
+
+This keeps the build network-pure and deliberately leaves StarNet's auxiliary ONNX workloads CPU-only, preserving the primary GPU slot for the local LLM stack.
 
 ## Nix outputs
 
@@ -71,8 +87,6 @@ This branch adds:
 - `packages.<system>.default`
 - `overlays.default`
 - `homeManagerModules.starnet`
-
-The package uses `buildNpmPackage`, Node 22 and the repository lockfile. The npm dependency hash was resolved by GitHub Actions against this exact lockfile and is pinned in `nix/package.nix`.
 
 ### Consume from the host flake
 
@@ -91,20 +105,18 @@ Import the module in the existing Home Manager module list:
 inputs.starnet.homeManagerModules.starnet
 ```
 
-Example configuration; use the host's existing package bindings rather than introducing duplicate Claude/Hermes installations:
+Aleph-host configuration:
 
 ```nix
 services.starnet = {
   enable = true;
   package = inputs.starnet.packages.${pkgs.system}.starnet;
 
-  # Reuse the existing llm-agents.nix Claude Code package.
-  claudePackage = claudeCode;
+  claudeCommand = "/run/current-system/sw/bin/claude";
   claudeExternalManagedAuth = true;
 
   hermes = {
     enable = true;
-    package = hermesAgent;
     provider = "nous";
     port = 8645;
 
@@ -123,9 +135,9 @@ The local coding agent should not redesign this integration. Its job is host-spe
 1. `nix flake check` this StarNet branch/package.
 2. Build the package and run `starnet-server` manually once on loopback.
 3. Confirm `http://127.0.0.1:8787` loads and state lands in the existing upstream XDG location.
-4. Confirm `hermes proxy ...` starts from the already-installed Hermes package and `/health` + `/v1/models` work.
+4. Confirm the existing Hermes profile binary starts `hermes proxy` and `/health` + `/v1/models` work.
 5. Configure StarNet Custom -> `http://127.0.0.1:8645/v1`; run one text turn and one StarNet tool-calling turn on a Hermes/Nous model.
-6. Set `STARNET_CLAUDE_BIN` through this module; run one `claude-cli` text turn using `sonnet`; confirm the actual backend is the host's intended GLM/Z.ai route and that no Claude API credential was copied into StarNet.
+6. Run one `claude-cli` text turn using `sonnet`; confirm the actual backend is the host's intended GLM/Z.ai route and that no Claude API credential was copied into StarNet.
 7. Only after both paths pass, enable the user services and perform the normal NixOS rebuild.
 8. Do not introduce Docker, imperative npm globals, a second Hermes home, or a separate StarNet state directory merely to make the smoke test pass.
 
