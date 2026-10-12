@@ -137,7 +137,13 @@ Only then consult the longer integration/donor documents or upstream implementat
 
 ## Final report
 
-Return only:
+Write the host-specific execution report to:
+
+`/home/aleph/starnetrelatorio.md`
+
+This location is an explicit operator choice for an easy-to-find local report. It is **not** StarNet source or durable project documentation: do not add the report to `docs/`, the StarNet repository, Ouroboros, or `/etc/nixos`.
+
+The report should contain:
 
 - exact StarNet branch + locked commit;
 - the four host files changed (`flake.nix`, `flake.lock`, `home.nix`, `modules/home/starnet.nix`) or explain any justified deviation;
@@ -147,3 +153,5 @@ Return only:
 - Hermes text + tool-call smoke result;
 - Claude CLI/GLM-5.3 smoke result;
 - any remaining failure, with the smallest identified boundary and exact relevant error.
+
+At the end of the agent session, reply concisely with overall success/failure and the report path; the detailed report belongs in `~/starnetrelatorio.md`.
