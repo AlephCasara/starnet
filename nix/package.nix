@@ -28,11 +28,13 @@ buildNpmPackage rec {
   npmDepsHash = "sha256-u1GWHAC8CGxwg6KIqwQLxudWRkA0HXarla/JP3nXLe8=";
 
   # onnxruntime-node bundles the CPU runtime in the npm package. On linux/x64
-  # its install hook additionally downloads the CUDA/TensorRT provider DLLs
-  # from NuGet. That is both impure in a Nix sandbox and undesirable on this
-  # deployment: StarNet's media helpers must not occupy the primary LLM GPU.
-  # This is the package's documented switch; CPU ONNX remains available.
+  # its install hook additionally downloads CUDA/TensorRT provider binaries.
+  # StarNet currently contains both the new installer (via Transformers) and
+  # the legacy 1.21 installer (nested under kokoro-js), so set both documented
+  # skip switches. CPU ONNX remains available; the sidecar does not contend
+  # with the primary LLM for VRAM and the Nix build stays network-pure.
   ONNXRUNTIME_NODE_INSTALL = "skip";
+  ONNXRUNTIME_NODE_INSTALL_CUDA = "skip";
 
   dontNpmBuild = true;
 
