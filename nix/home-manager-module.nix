@@ -4,13 +4,32 @@ let
   cfg = config.services.starnet;
   inherit (lib) mkEnableOption mkIf mkOption optionalAttrs types;
 
+  # StarNet's upstream claude-cli provider uses `claude auth status` as a
+  # readiness probe. A host can instead authenticate Claude Code through an
+  # enforced managed-settings apiKeyHelper (for example an Anthropic-compatible
+  # coding plan) while `auth status` still reports signed out. In that one mode
+  # we bridge ONLY the readiness probe; every real invocation is exec'd into the
+  # host's Claude Code binary unchanged. No credential is read or copied here.
+  claudeCommand =
+    if cfg.claudePackage == null then null
+    else if cfg.claudeExternalManagedAuth then
+      pkgs.writeShellScript "starnet-claude-bridge" ''
+        if [ "$#" -ge 2 ] && [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+          printf '%s\n' '{"loggedIn":true,"authMethod":"external-managed"}'
+          exit 0
+        fi
+        exec ${cfg.claudePackage}/bin/claude "$@"
+      ''
+    else
+      "${cfg.claudePackage}/bin/claude";
+
   starnetEnvironment =
     {
       STARNET_PORT = toString cfg.port;
       SKYNET_PORT = toString cfg.port;
     }
-    // optionalAttrs (cfg.claudePackage != null) {
-      STARNET_CLAUDE_BIN = "${cfg.claudePackage}/bin/claude";
+    // optionalAttrs (claudeCommand != null) {
+      STARNET_CLAUDE_BIN = toString claudeCommand;
     }
     // optionalAttrs (cfg.hermes.enable && cfg.hermes.exposeAsCustomProvider) {
       CUSTOM_OPENAI_BASE_URL = "http://127.0.0.1:${toString cfg.hermes.port}/v1";
@@ -41,6 +60,17 @@ in
       type = types.nullOr types.package;
       default = null;
       description = "Optional Claude Code package. When set, STARNET_CLAUDE_BIN points at its claude executable.";
+    };
+
+    claudeExternalManagedAuth = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Treat the local Claude Code CLI as ready when authentication is supplied
+        by host-managed settings/apiKeyHelper rather than Claude's own login.
+        Only `claude auth status` is bridged; all model turns execute the real
+        Claude Code binary unchanged. Do not enable for subscription stacking.
+      '';
     };
 
     environment = mkOption {
@@ -91,6 +121,10 @@ in
 
   config = mkIf cfg.enable {
     assertions = [
+      {
+        assertion = !cfg.claudeExternalManagedAuth || cfg.claudePackage != null;
+        message = "services.starnet.claudePackage must be set when claudeExternalManagedAuth = true";
+      }
       {
         assertion = !cfg.hermes.enable || cfg.hermes.package != null;
         message = "services.starnet.hermes.package must be set when services.starnet.hermes.enable = true";
