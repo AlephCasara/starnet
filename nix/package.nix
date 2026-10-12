@@ -27,6 +27,13 @@ buildNpmPackage rec {
   # dependency drift now fails closed until the hash is deliberately updated.
   npmDepsHash = "sha256-u1GWHAC8CGxwg6KIqwQLxudWRkA0HXarla/JP3nXLe8=";
 
+  # onnxruntime-node bundles the CPU runtime in the npm package. On linux/x64
+  # its install hook additionally downloads the CUDA/TensorRT provider DLLs
+  # from NuGet. That is both impure in a Nix sandbox and undesirable on this
+  # deployment: StarNet's media helpers must not occupy the primary LLM GPU.
+  # This is the package's documented switch; CPU ONNX remains available.
+  ONNXRUNTIME_NODE_INSTALL = "skip";
+
   dontNpmBuild = true;
 
   nativeBuildInputs = [
