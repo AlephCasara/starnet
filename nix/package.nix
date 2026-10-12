@@ -23,10 +23,9 @@ buildNpmPackage rec {
 
   nodejs = nodejs_22;
 
-  # Replace after the first `nix build .#starnet -L`: Nix prints the exact
-  # sha256 it computed for package-lock.json. Keeping the fake hash here makes
-  # dependency drift fail closed instead of silently using the network.
-  npmDepsHash = lib.fakeHash;
+  # Fixed from GitHub Actions against this exact package-lock.json. Any
+  # dependency drift now fails closed until the hash is deliberately updated.
+  npmDepsHash = "sha256-u1GWHAC8CGxwg6KIqwQLxudWRkA0HXarla/JP3nXLe8=";
 
   dontNpmBuild = true;
 
