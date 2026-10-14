@@ -2,7 +2,17 @@
 
 let
   cfg = config.services.starnet;
-  inherit (lib) mkEnableOption mkIf mkOption optionalAttrs types;
+  inherit (lib) mkEnableOption mkIf mkMerge mkOption optionalAttrs types;
+
+  # External-attach wrapper for the Tauri shell: the systemd --user service is
+  # the ONLY sidecar authority; the desktop connects as a plain loopback client
+  # (STARNET_DESKTOP_SIDECAR_MODE=attach reuses the upstream bootstrap-token
+  # contract; the shell never spawns, restarts, resets, or quits the station).
+  desktopAttachWrapper = pkgs.writeShellScriptBin "starnet-desktop-attach" ''
+    export STARNET_DESKTOP_SIDECAR_MODE=attach
+    export STARNET_PORT="${toString cfg.port}"
+    exec ${cfg.desktop.package}/bin/starnet-desktop "$@"
+  '';
 
   rawClaudeCommand =
     if cfg.claudePackage != null then "${cfg.claudePackage}/bin/claude"
@@ -29,6 +39,7 @@ let
     {
       STARNET_PORT = toString cfg.port;
       SKYNET_PORT = toString cfg.port;
+      STARNET_WORKSPACES = cfg.workspaces;
     }
     // optionalAttrs (effectiveClaudeCommand != null) {
       STARNET_CLAUDE_BIN = toString effectiveClaudeCommand;
@@ -88,6 +99,30 @@ in
       description = "Additional non-secret environment variables passed to the StarNet user service.";
     };
 
+    workspaces = mkOption {
+      type = types.str;
+      default = "${config.home.homeDirectory}/.local/share/ai.skynet.harness/workspaces";
+      defaultText = lib.literalExpression ''
+        "''${config.home.homeDirectory}/.local/share/ai.skynet.harness/workspaces"'';
+      description = ''
+        Mutable station state directory (roster, saves, connectors, secrets vault).
+        Passed to the service as STARNET_WORKSPACES. This path is owned by the
+        running user and the station itself: a rebuild must never create, reset,
+        migrate, or delete it.
+      '';
+    };
+
+    desktop = {
+      attach = mkEnableOption "the Tauri desktop shell in external-attach mode (no desktop-owned sidecar)";
+
+      package = mkOption {
+        type = types.package;
+        default = pkgs.callPackage ./desktop.nix { starnet = config.services.starnet.package; };
+        defaultText = lib.literalExpression "pkgs.callPackage ./desktop.nix { }";
+        description = "starnet-desktop package to expose through the attach wrapper.";
+      };
+    };
+
     hermes = {
       enable = mkEnableOption "the Hermes OpenAI-compatible proxy next to StarNet";
 
@@ -134,15 +169,29 @@ in
     };
   };
 
-  config = mkIf cfg.enable {
-    assertions = [
-      {
-        assertion = !cfg.claudeExternalManagedAuth || rawClaudeCommand != null;
-        message = "services.starnet needs claudePackage or claudeCommand when claudeExternalManagedAuth = true";
-      }
-    ];
+  config = mkMerge [
+    {
+      assertions = [
+        {
+          # One station, one process authority: the desktop shell may only attach
+          # to the service-managed sidecar. A desktop-owned sidecar next to this
+          # service would race the station's workspace-owner lock.
+          assertion = !cfg.desktop.attach || cfg.enable;
+          message = "services.starnet.desktop.attach requires services.starnet.enable (the systemd --user service is the single sidecar authority)";
+        }
+      ];
+    }
 
-    home.packages = [ cfg.package ];
+    (mkIf cfg.enable {
+      assertions = [
+        {
+          assertion = !cfg.claudeExternalManagedAuth || rawClaudeCommand != null;
+          message = "services.starnet needs claudePackage or claudeCommand when claudeExternalManagedAuth = true";
+        }
+      ];
+
+    home.packages = [ cfg.package ]
+      ++ lib.optional cfg.desktop.attach desktopAttachWrapper;
 
     systemd.user.services = {
       starnet = {
@@ -179,5 +228,6 @@ in
         Install.WantedBy = [ "default.target" ];
       };
     };
-  };
+    })
+  ];
 }

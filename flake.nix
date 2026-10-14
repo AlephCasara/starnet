@@ -59,6 +59,11 @@
                   package = starnet;
                   claudeCommand = "/bin/false";
                   claudeExternalManagedAuth = true;
+                  workspaces = "/home/starnet-test/.local/share/ai.skynet.harness/workspaces";
+                  desktop = {
+                    attach = true;
+                    package = starnet-desktop;
+                  };
                   hermes = {
                     enable = true;
                     command = "/bin/false";
@@ -72,12 +77,15 @@
           };
 
           moduleServices = moduleEval.config.systemd.user.services;
+          modulePackages = moduleEval.config.home.packages;
           moduleAssertionsPass = builtins.all (a: a.assertion) moduleEval.config.assertions;
           moduleCheck =
             assert moduleAssertionsPass;
             assert builtins.hasAttr "starnet" moduleServices;
             assert builtins.hasAttr "starnet-hermes-proxy" moduleServices;
             assert lib.hasPrefix "${starnet}/bin/starnet-server" moduleServices.starnet.Service.ExecStart;
+            assert builtins.any (env: lib.hasPrefix "STARNET_WORKSPACES=" env) moduleServices.starnet.Service.Environment;
+            assert builtins.any (p: lib.hasSuffix "bin/starnet-desktop-attach" (builtins.toString p)) modulePackages;
             pkgs.runCommand "starnet-home-manager-module-eval" { } ''
               touch "$out"
             '';
