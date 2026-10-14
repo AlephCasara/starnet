@@ -1,0 +1,35 @@
+name: Apply external-sidecar source patch
+
+on:
+  push:
+    branches:
+      - integration/nixos-starnet-product
+    paths:
+      - scripts/apply-external-sidecar-main-patch.mjs
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: integration/nixos-starnet-product
+      - name: Apply guarded source transformation
+        run: node scripts/apply-external-sidecar-main-patch.mjs
+      - name: Format Rust
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml
+      - name: Verify patch hygiene
+        run: git diff --check
+      - name: Commit generated source edit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add src-tauri/src/main.rs
+          git diff --cached --quiet && exit 0
+          git config user.name "starnet-downstream-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat(desktop): attach to externally managed sidecar"
+          git push origin HEAD:integration/nixos-starnet-product
