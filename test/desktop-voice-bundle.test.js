@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const root = path.join(__dirname, '..');
@@ -11,6 +12,7 @@ const lock = JSON.parse(read('package-lock.json'));
 const tauri = JSON.parse(read('src-tauri/tauri.conf.json'));
 const infoPlist = read('src-tauri/Info.plist');
 const stage = read('scripts/stage-voice-deps.mjs');
+const linuxNative = read('scripts/prepare-linux-native.mjs');
 const buildRs = read('src-tauri/build.rs');
 const desktopCi = read('.github/workflows/desktop-build.yml');
 const releaseCi = read('.github/workflows/release-train.yml');
@@ -73,12 +75,16 @@ assert.match(
 
 assert.match(stage, /\^\(win\|darwin\|linux\)-\(x64\|arm64\)\$/, 'the staging script validates release target names');
 assert.match(stage, /pruneOnnxBinaries\(dest\)/, 'foreign ONNX native binaries are removed from the staged closure');
+assert.match(stage, /prepareLinuxNative\(dest, PLATFORM, ARCH\)/, 'Linux staging isolates incompatible ONNX ABIs after platform pruning');
 assert.match(stage, /if \(!pruned\.kept\.length\)/, 'the build fails closed when no target ONNX runtime survives');
 assert.match(stage, /for \(const dep of runtimeDeps\)/, 'every declared production dependency must exist in the staged tree');
 assert.match(stage, /DROP_ANYWHERE = new Set\(\['onnxruntime-web', 'adm-zip'\]\)/, 'browser ONNX and the build-only ZIP downloader are not shipped in the Node sidecar bundle');
 assert.match(stage, /build-only adm-zip leaked into the shipped runtime closure/, 'the build fails closed if the vulnerable postinstall-only ZIP package survives staging');
 assert.match(stage, /function purgeStaleReleasePackages\(\)/, 'warm Tauri outputs are purged so removed packages cannot survive in a later installer');
+assert.match(stage, /libonnxruntime\\\.so\\\.1/, 'warm Linux outputs purge the pre-isolation ONNX SONAME');
 assert.match(stage, /OUT === resolve\(join\(ROOT, 'src-tauri', 'voice-deps'\)\)/, 'stale-output purging is limited to the real desktop staging path');
+assert.match(linuxNative, /libstarnet-onnxruntime-\$\{version\}\.so\.1/, 'each Linux ONNX ABI gets a version-qualified StarNet SONAME');
+assert.match(linuxNative, /--replace-needed/, 'the native binding is retargeted to its isolated runtime');
 
 const { isUnusedMuslSharp, isUnusedDesktopAccelerator } = require('../scripts/lib/staged-native-packages.mjs');
 assert.equal(isUnusedMuslSharp('@img', 'sharp-linuxmusl-x64', 'linux'), true, 'glibc AppImage excludes the musl addon that linuxdeploy cannot load');
@@ -108,3 +114,57 @@ for(const dep of Object.keys(pkg.dependencies))assert.equal(isDevelopmentOnlyPac
 assert.match(stage,/filter: source => !isDevelopmentOnlyPackage/, 'fresh staging filters development closure');
 assert.match(stage,/relative\(packageRoot, childPath\)/, 'warm outputs use the same lockfile package identity');
 console.log('desktop staging: development-only native packages excluded, production/shared/optional packages preserved');
+
+// Exercise the Linux ABI isolator without requiring a real ELF or host patchelf.
+// The injected patchelf seam models SONAME/DT_NEEDED state while the test uses
+// the real filesystem rename/idempotence behavior.
+void import('../scripts/prepare-linux-native.mjs').then(({ prepareLinuxNative }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'starnet-onnx-isolation-'));
+  const sonames = new Map();
+  const needed = new Map();
+  const roots = [
+    ['node_modules/onnxruntime-node', '1.24.3'],
+    ['node_modules/kokoro-js/node_modules/onnxruntime-node', '1.21.0']
+  ];
+  for (const [rel, version] of roots) {
+    const pkgRoot = path.join(tmp, rel);
+    const native = path.join(pkgRoot, 'bin', 'napi-v3', 'linux', 'x64');
+    fs.mkdirSync(native, { recursive: true });
+    fs.writeFileSync(path.join(pkgRoot, 'package.json'), JSON.stringify({ version }));
+    fs.writeFileSync(path.join(native, 'libonnxruntime.so.1'), 'runtime-' + version);
+    fs.writeFileSync(path.join(native, 'onnxruntime_binding.node'), 'binding-' + version);
+  }
+  const fakePatchelf = (...args) => {
+    const op = args[0];
+    if (op === '--version') return 'patchelf fake';
+    if (op === '--print-soname') return sonames.get(args[1]) || 'libonnxruntime.so.1';
+    if (op === '--set-soname') { sonames.set(args[2], args[1]); return ''; }
+    if (op === '--print-needed') return (needed.get(args[1]) || ['libonnxruntime.so.1', 'libc.so.6']).join('\n');
+    if (op === '--replace-needed') {
+      const current = needed.get(args[3]) || ['libonnxruntime.so.1', 'libc.so.6'];
+      needed.set(args[3], current.map(name => name === args[1] ? args[2] : name));
+      return '';
+    }
+    throw new Error('unexpected fake patchelf operation: ' + args.join(' '));
+  };
+  try {
+    const prepared = prepareLinuxNative(tmp, 'linux', 'x64', fakePatchelf);
+    assert.equal(prepared.length, 2, 'both incompatible ONNX runtimes are isolated');
+    assert.notEqual(prepared[0].soname, prepared[1].soname, 'different ABI versions cannot share a SONAME');
+    for (const item of prepared) {
+      assert.ok(fs.existsSync(item.library), 'version-qualified ONNX library exists: ' + item.soname);
+      assert.ok(!fs.existsSync(path.join(item.native, 'libonnxruntime.so.1')), 'ambiguous SONAME file was removed');
+      assert.ok((needed.get(item.binding) || []).includes(item.soname), 'binding points at its version-qualified runtime');
+    }
+    assert.equal(prepareLinuxNative(tmp, 'linux', 'x64', fakePatchelf).length, 2, 'preparation is idempotent on an already-isolated tree');
+    let touched = false;
+    assert.deepEqual(prepareLinuxNative(tmp, 'darwin', 'x64', () => { touched = true; }), [], 'non-Linux platforms remain untouched');
+    assert.equal(touched, false, 'non-Linux path never invokes patchelf');
+    console.log('Linux ONNX ABI isolation tests passed');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}).catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});
