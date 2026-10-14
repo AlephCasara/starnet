@@ -136,6 +136,45 @@ Medium-high as a Linux correctness fix. The implementation should be proposed se
 
 Upstream either (a) converges the speech dependency graph onto one ABI, or (b) ships an equivalent Linux loader/SONAME isolation strategy and the bundle + Nix regression gates pass with this patch deleted.
 
+---
+
+### `external-sidecar-attach`
+
+**Reason**
+
+A Nix/systemd-managed StarNet needs one canonical station process while still allowing the native Tauri UI to use that same station. Upstream `v0.13.3` always treats the desktop as the sidecar owner, so opening Tauri would otherwise spawn/reap/restart a second process lifecycle.
+
+**Files**
+
+- `src-tauri/src/external_sidecar.rs`
+- `src-tauri/src/main.rs`
+
+**Behavior**
+
+- default upstream behavior remains `spawn` / desktop-owned;
+- explicit `STARNET_DESKTOP_SIDECAR_MODE=attach` (aliases `external`/`existing`) attaches to the loopback port in `STARNET_PORT` or legacy `SKYNET_PORT`;
+- attach mode discovers the station's master API token through the same `GET /` bootstrap contract already used by CLI/MCP/ACP;
+- upstream v0.13.3 same-OS-user peer ownership remains the authorization boundary for token injection;
+- external mode does not migrate workspace state, reap processes, spawn a child, start a crash guardian, restart/reset the station, send halt/quit during desktop shutdown, or kill the external process;
+- native credential mutations fail before touching keychain/workspace because `/api/key` and `/api/channels/token` are intentionally protected by the desktop child's private IPC token, which an attached client must not inherit;
+- desktop-owned mode retains its existing credential and lifecycle behavior.
+
+**Security boundary**
+
+The patch does not expose or persist either the master API token or the child-only IPC token. It does not enable `STARNET_TRUST_LOCAL_PEERS`. An external station that withholds its bootstrap token because peer ownership cannot be proved remains fail-closed.
+
+**Tests / gates**
+
+`src-tauri/src/external_sidecar.rs` contains unit coverage for explicit mode parsing, valid/invalid ports, ownership, bootstrap token JSON parsing, and token-withheld failure. The Linux/Tauri build gate is part of the `linux-desktop-package` work and is required before this patch is considered release-ready.
+
+**Upstreamability**
+
+High as a generic desktop lifecycle feature. It is intentionally expressed as `Desktop` vs `External` ownership rather than as a NixOS- or user-specific conditional.
+
+**Remove when**
+
+Upstream desktop provides an equivalent authenticated existing-sidecar/external-runtime mode with the same non-ownership guarantees and tests pass after deleting this patch.
+
 ## Security decisions that are not downstream patches
 
 ### Remote browser/debug
@@ -149,7 +188,6 @@ The downstream therefore does **not** enable `STARNET_TRUST_LOCAL_PEERS=1` by de
 The following names are reservations, not claims that the features are implemented yet. Add a full ledger entry only when code lands:
 
 - `linux-desktop-package`
-- `external-sidecar-attach`
 - `external-speech-provider`
 - `station-spec-reconciliation` (only if current station APIs support a non-destructive implementation)
 - external-system adapters only where StarNet's existing MCP/plugin/API seams are insufficient
