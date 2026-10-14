@@ -3434,10 +3434,18 @@ fn spawn_tray_updater(app: AppHandle) {
 
 // ---- Tauri commands (called from the frontend Harness seam) ----
 
+fn require_desktop_owned_credentials(state: &AppState) -> Result<(), String> {
+    if state.sidecar_ownership.is_external() {
+        return Err("this StarNet station is externally managed; configure its credentials through the station supervisor rather than this desktop shell".to_string());
+    }
+    Ok(())
+}
+
 /// Store (or, for an empty value, clear) the BYOK key in the OS keychain, then push it
 /// to the running sidecar — no restart, so the current page is never disrupted.
 #[tauri::command]
 fn harness_store_key(key: String, state: State<AppState>) -> Result<(), String> {
+    require_desktop_owned_credentials(state.inner())?;
     let entry = keychain_entry().map_err(|e| e.to_string())?;
     let previous = entry.get_password().ok().filter(|v| !v.trim().is_empty());
     let trimmed = key.trim();
@@ -3468,6 +3476,7 @@ fn harness_store_provider_key(
     base_url: Option<String>,
     state: State<AppState>,
 ) -> Result<(), String> {
+    require_desktop_owned_credentials(state.inner())?;
     let provider_id = normalize_provider(&provider);
     let key_trimmed = key.as_ref().map(|k| k.trim().to_string());
     let mut rollback: Option<(keyring::Entry, Option<String>)> = None;
@@ -3526,6 +3535,7 @@ fn harness_store_provider_key_pool(
     keys: Vec<String>,
     state: State<AppState>,
 ) -> Result<usize, String> {
+    require_desktop_owned_credentials(state.inner())?;
     let provider_id = normalize_provider(&provider);
     if !KEYCHAIN_PROVIDERS.contains(&provider_id) {
         return Err("this provider does not support alternate API keys".to_string());
@@ -3605,6 +3615,9 @@ fn harness_clear_key(state: State<AppState>) -> Result<(), String> {
 /// assume success (a locked keychain leaves the token on disk, by design).
 #[tauri::command]
 fn harness_adopt_credits_token(state: State<AppState>) -> bool {
+    if state.sidecar_ownership.is_external() {
+        return false;
+    }
     migrate_credits_token_from_plaintext(&state.workspaces)
 }
 
@@ -3618,7 +3631,8 @@ fn harness_has_credits_token() -> bool {
 /// "unlinked" while a money-spending credential is still in the keychain — truthful telemetry
 /// applies to destruction too. Safe under the secret-durability law: relinking mints a new token.
 #[tauri::command]
-fn harness_clear_credits_token() -> Result<(), String> {
+fn harness_clear_credits_token(state: State<AppState>) -> Result<(), String> {
+    require_desktop_owned_credentials(state.inner())?;
     let entry = credits_keychain_entry().map_err(|e| e.to_string())?;
     delete_credential_honest(&entry)
 }
@@ -3631,6 +3645,7 @@ fn harness_store_channel_token(
     token: String,
     state: State<AppState>,
 ) -> Result<(), String> {
+    require_desktop_owned_credentials(state.inner())?;
     let channel = channel.trim().to_ascii_lowercase();
     let trimmed = token.trim();
     if !is_known_channel(&channel) {
