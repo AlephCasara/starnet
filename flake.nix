@@ -131,12 +131,25 @@
             done
             touch "$out"
           '';
+          externalAttachE2E = pkgs.runCommand "starnet-external-attach-e2e"
+            {
+              nativeBuildInputs = [ pkgs.nodejs_22 ];
+            } ''
+            set -eu
+            export STARNET_E2E_HOME="$TMPDIR/home"
+            export STARNET_E2E_WORKSPACES="$TMPDIR/workspaces"
+            mkdir -p "$STARNET_E2E_HOME" "$STARNET_E2E_WORKSPACES"
+            cd ${self}
+            node test/external-attach.e2e.mjs "${starnet}/bin/starnet-server"
+            touch "$out"
+          '';
         in
         {
           package = starnet;
           desktop = starnet-desktop;
           desktop-closure = desktopClosure;
           home-manager-module = moduleCheck;
+          external-attach-e2e = externalAttachE2E;
           cli-unit = nodeCheck "starnet-cli-unit" "test/cli.test.js";
           desktop-external-ownership = nodeCheck "starnet-desktop-external-ownership" "test/desktop-external-ownership.test.js";
           desktop-voice-bundle = nodeCheck "starnet-desktop-voice-bundle" "test/desktop-voice-bundle.test.js";
