@@ -85,7 +85,7 @@
             assert builtins.hasAttr "starnet-hermes-proxy" moduleServices;
             assert lib.hasPrefix "${starnet}/bin/starnet-server" moduleServices.starnet.Service.ExecStart;
             assert builtins.any (env: lib.hasPrefix "STARNET_WORKSPACES=" env) moduleServices.starnet.Service.Environment;
-            assert builtins.any (p: lib.hasSuffix "bin/starnet-desktop-attach" (builtins.toString p)) modulePackages;
+            assert builtins.any (p: p.name or null == "starnet-desktop-attach") modulePackages;
             pkgs.runCommand "starnet-home-manager-module-eval" { } ''
               touch "$out"
             '';
