@@ -53,11 +53,15 @@ const childExit = new Promise(resolve => child.on('exit', code => resolve(code))
 try {
   // 1. the station becomes healthy on its own (nobody spawns anything for the client)
   let healthy = false;
+  let serverDied = false;
   for (let i = 0; i < 240; i++) {
     try { const r = await get('/api/health'); if (r.status === 200) { healthy = true; break; } } catch (_) {}
-    if (await childExit.then(c => c !== null, () => false)) break;
-    await sleep(500);
+    // A station that exits must break the wait; a live one must not block it.
+    serverDied = await Promise.race([childExit.then(() => true), sleep(200).then(() => false)]);
+    if (serverDied) break;
+    await sleep(300);
   }
+  if (serverDied) console.error('station stderr tail:\n' + stderrTail);
   ok(healthy, 'station reaches /api/health 200 without any client-side lifecycle');
 
   // 2. unauthenticated API access stays forbidden
