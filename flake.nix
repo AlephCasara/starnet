@@ -14,9 +14,10 @@
       packages = forAllSystems (pkgs:
         let
           starnet = pkgs.callPackage ./nix/package.nix { };
+          starnet-desktop = pkgs.callPackage ./nix/desktop.nix { inherit starnet; };
         in
         {
-          inherit starnet;
+          inherit starnet starnet-desktop;
           default = starnet;
         });
 
@@ -24,6 +25,7 @@
         let
           lib = nixpkgs.lib;
           starnet = self.packages.${pkgs.stdenv.hostPlatform.system}.starnet;
+          starnet-desktop = self.packages.${pkgs.stdenv.hostPlatform.system}.starnet-desktop;
 
           moduleEval = lib.evalModules {
             specialArgs = { inherit pkgs; };
@@ -92,14 +94,20 @@
         in
         {
           package = starnet;
+          desktop = starnet-desktop;
           home-manager-module = moduleCheck;
           cli-unit = nodeCheck "starnet-cli-unit" "test/cli.test.js";
           desktop-voice-bundle = nodeCheck "starnet-desktop-voice-bundle" "test/desktop-voice-bundle.test.js";
         });
 
-      overlays.default = final: _prev: {
-        starnet = final.callPackage ./nix/package.nix { };
-      };
+      overlays.default = final: _prev:
+        let
+          starnet = final.callPackage ./nix/package.nix { };
+        in
+        {
+          inherit starnet;
+          starnet-desktop = final.callPackage ./nix/desktop.nix { inherit starnet; };
+        };
 
       homeManagerModules.default = import ./nix/home-manager-module.nix;
       homeManagerModules.starnet = self.homeManagerModules.default;
