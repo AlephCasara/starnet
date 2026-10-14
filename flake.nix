@@ -161,6 +161,16 @@
               "${pkgs.xvfb-run}/bin/xvfb-run"
             touch "$out"
           '';
+
+          cliTaskE2E = pkgs.runCommand "starnet-cli-task-e2e"
+            {
+              nativeBuildInputs = [ pkgs.nodejs_22 ];
+            } ''
+            export HOME="$TMPDIR/home"; mkdir -p "$HOME"
+            cd ${self}
+            node test/cli-task-e2e.mjs "${starnet}/bin/starnet" "${starnet}/bin/starnet-server"
+            touch "$out"
+          '';
         in
         {
           package = starnet;
@@ -170,6 +180,7 @@
           external-attach-e2e = externalAttachE2E;
           voice-abi-dynamic = voiceAbiDynamic;
           desktop-attach-smoke = desktopAttachSmoke;
+          cli-task-e2e = cliTaskE2E;
           cli-unit = nodeCheck "starnet-cli-unit" "test/cli.test.js";
           desktop-external-ownership = nodeCheck "starnet-desktop-external-ownership" "test/desktop-external-ownership.test.js";
           desktop-voice-bundle = nodeCheck "starnet-desktop-voice-bundle" "test/desktop-voice-bundle.test.js";
