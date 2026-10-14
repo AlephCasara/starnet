@@ -187,7 +187,48 @@ The downstream therefore does **not** enable `STARNET_TRUST_LOCAL_PEERS=1` by de
 
 The following names are reservations, not claims that the features are implemented yet. Add a full ledger entry only when code lands:
 
-- `linux-desktop-package`
 - `external-speech-provider`
-- `station-spec-reconciliation` (only if current station APIs support a non-destructive implementation)
-- external-system adapters only where StarNet's existing MCP/plugin/API seams are insufficient
+- `station-spec-reconciliation` (decision: WAIT, see docs/INTEGRATION_SEAMS.md; no server-side station plan/build primitive exists in v0.13.3)
+- external-system adapters only where StarNet's existing MCP/plugin/API seams are insufficient (seam map: docs/INTEGRATION_SEAMS.md)
+
+---
+
+### `linux-desktop-package`
+
+**Reason**
+
+Produce the Linux Tauri desktop shell from a pure Nix derivation so the externally managed attach mode has something to run, without downloading node/voice deps at build time and without a second mutable dependency tree.
+
+**Files**
+
+- `nix/desktop.nix`
+- `flake.nix` (desktop package + closure check + attach smoke + cli task e2e + voice abi dynamic checks)
+- `test/desktop-attach-smoke.sh`
+- `test/cli-task-e2e.mjs`
+- `test/voice-abi-dynamic.mjs`
+- `test/external-attach.e2e.mjs`
+
+**Behavior**
+
+- `starnet-desktop` builds from the repo source with the pinned Cargo vendor hash; `preBuild` runs the upstream frontend staging script from the unpacked source root and materializes the declared bundle inputs (`externalBin` node-`<triple>`, `voice-deps/node_modules`) as symlinks to the nix node and the canonical runtime closure;
+- `postPatch` rewrites the vendored `libappindicator-sys` crate to the store lib path and FAILS LOUDLY if the crate is not found (a silent skip surfaced as a runtime tray panic);
+- `postInstall` exposes the product binary name and symlinks sidecar/frontend/shared/node_modules from the runtime package;
+- checks: resource closure parity with the runtime package, bounded Xvfb attach smoke (fail-closed against a dead port; survival + no second sidecar + station survives exit), CLI task E2E (mock provider proves `isTask:true` yields the 79-tool headless surface), dynamic ONNX ABI isolation.
+
+**Tests / gates**
+
+`nix build .#starnet-desktop`, `nix flake check` (desktop, desktop-closure, desktop-attach-smoke, cli-task-e2e, voice-abi-dynamic).
+
+**Upstreamability**
+
+Low as packaging (upstream ships no Nix). The loud-failure `libappindicator-sys` patching is generic Tauri-on-Nix practice.
+
+**Remove when**
+
+Upstream ships an equivalent maintained Linux/Nix packaging, or the desktop shell is dropped.
+
+---
+
+### `remote-access-recipes` (documentation only)
+
+`docs/REMOTE_ACCESS.md`: the supported SSH local-forward recipe under peer ownership (sshd's per-connection child opens the forwarded connection as the login user, so same-user forwarding passes `/proc/net/tcp` UID checks and different-user forwarding stays fail-closed). No code, no `STARNET_TRUST_LOCAL_PEERS`.
