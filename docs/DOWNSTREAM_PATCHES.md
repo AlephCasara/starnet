@@ -93,6 +93,49 @@ High. This is a one-line product bug fix plus a one-line regression assertion an
 
 Upstream headless CLI emits the same task semantics (whether via `isTask: true` or a renamed equivalent) and the regression test passes without this patch.
 
+---
+
+### `linux-onnx-abi-isolation`
+
+**Reason**
+
+The current offline voice dependency graph contains two `onnxruntime-node` ABIs: the Transformers path and Kokoro's nested runtime. On Linux both native libraries advertise `libonnxruntime.so.1`, so one process can bind the second native addon to the first runtime loaded and fail on incompatible symbols.
+
+**Files**
+
+- `scripts/prepare-linux-native.mjs`
+- `scripts/stage-voice-deps.mjs`
+- `nix/package.nix`
+- `test/desktop-voice-bundle.test.js`
+- `flake.nix`
+
+**Behavior**
+
+- each Linux ONNX runtime copy gets a version-qualified SONAME;
+- the corresponding `onnxruntime_binding.node` DT_NEEDED entry is rewritten to that SONAME;
+- desktop voice staging and the Nix runtime closure both perform the isolation;
+- non-Linux staging is unchanged;
+- repeated preparation is idempotent;
+- warm Tauri resources cannot silently restore an unnamespaced runtime.
+
+**Source / inspiration**
+
+Reimplemented against upstream `v0.13.3` from the design in the MIT-licensed `mvalancy/starnet-linux` commit `e8d7a7abeed90fff6cde06adea80630846fb11b1`. The donor repository is a reference only; it was not merged and its older v0.12.x packaging stack was not adopted wholesale.
+
+**Tests / gates**
+
+- `test/desktop-voice-bundle.test.js` uses two synthetic runtime versions and an injected `patchelf` seam to verify unique SONAMEs, binding rewrite, idempotence and non-Linux no-op behavior;
+- the test is also a Nix flake check;
+- the normal Nix package build runs the real `patchelf` against the resolved npm closure.
+
+**Upstreamability**
+
+Medium-high as a Linux correctness fix. The implementation should be proposed separately from downstream Nix packaging so upstream can accept the native-loader fix without accepting a new packaging target.
+
+**Remove when**
+
+Upstream either (a) converges the speech dependency graph onto one ABI, or (b) ships an equivalent Linux loader/SONAME isolation strategy and the bundle + Nix regression gates pass with this patch deleted.
+
 ## Security decisions that are not downstream patches
 
 ### Remote browser/debug
