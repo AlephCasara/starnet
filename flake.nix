@@ -130,6 +130,7 @@
           desktop-closure = desktopClosure;
           home-manager-module = moduleCheck;
           cli-unit = nodeCheck "starnet-cli-unit" "test/cli.test.js";
+          desktop-external-ownership = nodeCheck "starnet-desktop-external-ownership" "test/desktop-external-ownership.test.js";
           desktop-voice-bundle = nodeCheck "starnet-desktop-voice-bundle" "test/desktop-voice-bundle.test.js";
         });
 
