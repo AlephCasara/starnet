@@ -44,10 +44,21 @@ rustPlatform.buildRustPackage rec {
   # Tauri embeds HTML/JS/CSS at compile time. The staging script is pure local
   # filesystem work: it removes review/source art from the embedded closure and
   # produces frontend-embed/loose-assets.json. No npm install/network is needed.
+  # preBuild runs with cwd = the unpacked source root (buildRustPackage only
+  # cds into buildAndTestSubdir after preBuild), so a plain relative path is
+  # correct; neither `pushd ..` nor a `$sourceRoot/` prefix resolves there.
+  #
+  # build.rs also validates the declared bundle inputs: `externalBin`
+  # ("binaries/node" + target triple) and the `voice-deps/node_modules`
+  # resource. The dev flow materializes both from npm downloads
+  # (scripts/prepare-node.mjs / stage-voice-deps.mjs); in the sandbox they are
+  # symlinked from the canonical runtime closure instead, keeping the build
+  # network-pure and the node_modules tree single-sourced.
   preBuild = ''
-    pushd .. >/dev/null
     ${nodejs_22}/bin/node scripts/stage-frontend-dist.mjs
-    popd >/dev/null
+    mkdir -p src-tauri/binaries src-tauri/voice-deps
+    ln -sfn ${nodejs_22}/bin/node "src-tauri/binaries/node-${stdenv.hostPlatform.rust.rustcTargetSpec}"
+    ln -sfn ${runtime}/lib/starnet/node_modules src-tauri/voice-deps/node_modules
   '';
 
   # Tauri tray support dlopens libayatana-appindicator by SONAME. Point the
