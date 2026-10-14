@@ -13,6 +13,7 @@
 , which
 , python3
 , pkg-config
+, patchelf
 }:
 
 buildNpmPackage rec {
@@ -37,10 +38,16 @@ buildNpmPackage rec {
     makeWrapper
     python3
     pkg-config
+    patchelf
   ];
 
   installPhase = ''
     runHook preInstall
+
+    # Transformers and Kokoro currently carry different onnxruntime-node ABIs
+    # with the same Linux SONAME. Isolate them deterministically in the build
+    # sandbox before copying the immutable runtime closure into the Nix store.
+    ${nodejs_22}/bin/node scripts/prepare-linux-native.mjs node_modules
 
     mkdir -p "$out/lib/starnet" "$out/bin"
     cp -R . "$out/lib/starnet/"
