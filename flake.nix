@@ -143,6 +143,24 @@
             node test/external-attach.e2e.mjs "${starnet}/bin/starnet-server"
             touch "$out"
           '';
+          voiceAbiDynamic = pkgs.runCommand "starnet-voice-abi-dynamic"
+            {
+              nativeBuildInputs = [ pkgs.nodejs_22 ];
+            } ''
+            cd ${self}
+            node test/voice-abi-dynamic.mjs "${starnet}/lib/starnet/node_modules"
+            touch "$out"
+          '';
+          desktopAttachSmoke = pkgs.runCommand "starnet-desktop-attach-smoke"
+            {
+              nativeBuildInputs = [ pkgs.curl pkgs.procps pkgs.xvfb-run ];
+            } ''
+            bash ${self}/test/desktop-attach-smoke.sh \
+              "${starnet}/bin/starnet-server" \
+              "${starnet-desktop}/bin/starnet-desktop" \
+              "${pkgs.xvfb-run}/bin/xvfb-run"
+            touch "$out"
+          '';
         in
         {
           package = starnet;
@@ -150,6 +168,8 @@
           desktop-closure = desktopClosure;
           home-manager-module = moduleCheck;
           external-attach-e2e = externalAttachE2E;
+          voice-abi-dynamic = voiceAbiDynamic;
+          desktop-attach-smoke = desktopAttachSmoke;
           cli-unit = nodeCheck "starnet-cli-unit" "test/cli.test.js";
           desktop-external-ownership = nodeCheck "starnet-desktop-external-ownership" "test/desktop-external-ownership.test.js";
           desktop-voice-bundle = nodeCheck "starnet-desktop-voice-bundle" "test/desktop-voice-bundle.test.js";

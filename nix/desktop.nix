@@ -63,11 +63,21 @@ rustPlatform.buildRustPackage rec {
 
   # Tauri tray support dlopens libayatana-appindicator by SONAME. Point the
   # vendored sys crate at the store path, following current nixpkgs Tauri practice.
+  # The crate may sit one or two levels below $cargoDepsCopy depending on how the
+  # vendor tarball was laid out; a miss is a loud error, never a silent skip (a
+  # silently unpatched crate surfaces as a tray panic at RUNTIME, which is how
+  # this was originally discovered).
   postPatch = ''
-    if compgen -G "$cargoDepsCopy/*/libappindicator-sys-*/src/lib.rs" > /dev/null; then
-      substituteInPlace $cargoDepsCopy/*/libappindicator-sys-*/src/lib.rs \
-        --replace-fail "libayatana-appindicator3.so.1" "${libayatana-appindicator}/lib/libayatana-appindicator3.so.1"
+    appindicator_srcs=$(ls "$cargoDepsCopy"/*/libappindicator-sys-*/src/lib.rs "$cargoDepsCopy"/*/*/libappindicator-sys-*/src/lib.rs 2>/dev/null || true)
+    if [ -z "$appindicator_srcs" ]; then
+      echo "ERROR: libappindicator-sys not found under $cargoDepsCopy" >&2
+      ls -R "$cargoDepsCopy" | head -40 >&2
+      exit 1
     fi
+    for src in $appindicator_srcs; do
+      substituteInPlace "$src" \
+        --replace-fail "libayatana-appindicator3.so.1" "${libayatana-appindicator}/lib/libayatana-appindicator3.so.1"
+    done
   '';
 
   # These tests are pure Rust/unit tests and exercise the attach parser/token
