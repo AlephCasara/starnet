@@ -25,7 +25,7 @@ rustPlatform.buildRustPackage rec {
 
   # Intentionally starts as a fixed-output assertion. CI prints the real hash
   # when Cargo.lock changes; the downstream never vendors crates from the network.
-  cargoHash = lib.fakeHash;
+  cargoHash = "sha256-ZsCYkwezQQtNceQ6F0DnM7yl/C70/+bp295s17Dr/rE=";
 
   nativeBuildInputs = [
     nodejs_22
