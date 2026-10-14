@@ -1,8 +1,9 @@
 // StarNet — native desktop shell (Tauri v2).
 //
-// Wraps the existing browser app: spawns the zero-dependency Node sidecar on a
-// private loopback port, waits for it to listen, then opens that URL in a native
-// WebView2 window. The sidecar's lifetime is bound to this process.
+// Wraps the existing browser app. By default the desktop owns one Node sidecar on a
+// private loopback port. An explicit attach mode can instead use one already-running
+// station owned by an external supervisor; in that mode this process never controls
+// the station lifecycle.
 //
 // Secrets (roadmap 2.1): BYOK API keys live in the OS keychain (never in
 // localStorage). The Rust side stores/reads them via the `keyring` crate. Keys are
@@ -14,6 +15,7 @@
 mod credentials;
 mod desktop_assets;
 mod erase_all;
+mod external_sidecar;
 mod fresh_start;
 mod hud_mode;
 mod lifecycle_preferences;
@@ -64,6 +66,7 @@ struct AppState {
     root: PathBuf,
     workspaces: PathBuf,
     startup_log: Option<PathBuf>,
+    sidecar_ownership: external_sidecar::SidecarOwnership,
     sidecar: Mutex<Option<Child>>,
     keep_awake: Mutex<KeepAwakeState>,
     lifecycle_preferences_path: PathBuf,
@@ -207,6 +210,9 @@ impl Drop for RecoveryOperation<'_> {
 }
 
 fn begin_recovery(state: &AppState) -> Result<RecoveryOperation<'_>, String> {
+    if state.sidecar_ownership.is_external() {
+        return Err("this StarNet station is externally managed; use its process supervisor for restart/reset operations".to_string());
+    }
     state
         .recovery_in_progress
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -1978,6 +1984,13 @@ fn sidecar_command(state: &AppState, entry: &Path, node: &Path) -> Command {
 /// Spawn the sidecar ONCE, injecting the keychain key (if any) as SKYNET_OPENROUTER_KEY
 /// and the per-launch IPC token. Returns true once it's listening.
 fn spawn_sidecar(state: &AppState) -> bool {
+    if state.sidecar_ownership.is_external() {
+        log_startup(
+            &state.startup_log,
+            "spawn_sidecar: refused for externally managed station",
+        );
+        return false;
+    }
     let entry = state.root.join("sidecar").join("index.js");
     let node = node_binary(&state.root);
     log_startup(
@@ -2764,6 +2777,9 @@ fn post_sidecar_quit(state: &AppState, timeout: Duration) {
 /// Ask the sidecar to shut down cleanly (it closes the station browser, flushing its sign-ins, and exits), wait a
 /// bounded moment for it to leave, then `kill_sidecar` ends whatever is left. The kill still guarantees no orphan.
 fn stop_sidecar_gracefully(state: &AppState) {
+    if state.sidecar_ownership.is_external() {
+        return;
+    }
     post_sidecar_quit(state, Duration::from_secs(2));
     let deadline = Instant::now() + Duration::from_millis(3500);
     while Instant::now() < deadline {
@@ -2789,6 +2805,9 @@ fn stop_sidecar_gracefully(state: &AppState) {
 /// clean stop before the process dies; the kill guarantees no orphan sidecar outlives an explicit Quit.
 fn drain_and_kill_sidecar(state: &AppState) {
     state.shutting_down.store(true, Ordering::SeqCst);
+    if state.sidecar_ownership.is_external() {
+        return;
+    }
     post_sidecar_halt(state, Duration::from_secs(3));
     stop_sidecar_gracefully(state);
 }
@@ -4037,11 +4056,19 @@ fn is_sidecar_page(url: &tauri::Url, sidecar_port: u16) -> bool {
         && url.port() == Some(sidecar_port)
         && url.username().is_empty()
         && url.password().is_none()
-        && SIDECAR_PAGE_ROUTES.iter().any(|route| url.path().starts_with(route))
+        && SIDECAR_PAGE_ROUTES
+            .iter()
+            .any(|route| url.path().starts_with(route))
 }
 
 /// The sidecar's sandboxed page routes a frame of the main window may load (see is_app_navigation).
-const SIDECAR_PAGE_ROUTES: [&str; 5] = ["/view/", "/workshop-run/", "/plugin-ui/", "/plugin-draft/", "/app-ui/"];
+const SIDECAR_PAGE_ROUTES: [&str; 5] = [
+    "/view/",
+    "/workshop-run/",
+    "/plugin-ui/",
+    "/plugin-draft/",
+    "/app-ui/",
+];
 
 #[cfg(test)]
 mod navigation_guard_tests {
@@ -4071,13 +4098,25 @@ mod navigation_guard_tests {
     #[test]
     fn agent_pages_from_this_sidecar_load_in_the_browser_window() {
         // macOS / Linux ask the guard about every frame: the BROWSER window's sandboxed iframe must pass
-        assert!(ok("http://127.0.0.1:8787/view/~t/st1.abc/nova/site/index.html"));
-        assert!(ok("http://127.0.0.1:8787/workshop-run/~t/st1.abc/nova/r1/index.html"));
+        assert!(ok(
+            "http://127.0.0.1:8787/view/~t/st1.abc/nova/site/index.html"
+        ));
+        assert!(ok(
+            "http://127.0.0.1:8787/workshop-run/~t/st1.abc/nova/r1/index.html"
+        ));
         // …and the APPS / plugin windows, which frame the same way (macOS asks about their frames too)
-        assert!(ok("http://127.0.0.1:8787/plugin-ui/~t/st1.abc/weather/0123abcd/index.html"));
-        assert!(ok("http://127.0.0.1:8787/plugin-draft/~t/st1.abc/weather/0123abcd/index.html"));
-        assert!(ok("http://127.0.0.1:8787/app-ui/~t/st1.abc/notes/0123abcd/index.html"));
-        assert!(!ok("http://127.0.0.1:9999/app-ui/~t/st1.abc/notes/0123abcd/index.html"));
+        assert!(ok(
+            "http://127.0.0.1:8787/plugin-ui/~t/st1.abc/weather/0123abcd/index.html"
+        ));
+        assert!(ok(
+            "http://127.0.0.1:8787/plugin-draft/~t/st1.abc/weather/0123abcd/index.html"
+        ));
+        assert!(ok(
+            "http://127.0.0.1:8787/app-ui/~t/st1.abc/notes/0123abcd/index.html"
+        ));
+        assert!(!ok(
+            "http://127.0.0.1:9999/app-ui/~t/st1.abc/notes/0123abcd/index.html"
+        ));
         assert!(!ok("http://127.0.0.1:8787/app-uix/x"));
         // …and nothing wider: the API, another port, another host, https, credentials, look-alike paths
         assert!(!ok("http://127.0.0.1:8787/api/file?agent=a&path=x"));
@@ -4087,7 +4126,10 @@ mod navigation_guard_tests {
         assert!(!ok("https://127.0.0.1:8787/view/~t/x/nova/a.html"));
         assert!(!ok("http://user:pw@127.0.0.1:8787/view/~t/x/nova/a.html"));
         assert!(!ok("http://127.0.0.1:8787/viewer/x"));
-        assert!(!is_app_navigation(&tauri::Url::parse("http://127.0.0.1:0/view/x").unwrap(), 0));
+        assert!(!is_app_navigation(
+            &tauri::Url::parse("http://127.0.0.1:0/view/x").unwrap(),
+            0
+        ));
     }
 }
 
@@ -4918,10 +4960,14 @@ fn starnet_set_close_to_tray(
 fn main() {
     let mut context = tauri::generate_context!();
     context.assets = Box::new(desktop_assets::DesktopAssets::new(context.assets));
-    // Pick the sidecar port BEFORE the app is built so the webview CSP can name exactly that
-    // port (tauri.conf.json can only say 127.0.0.1:*). A second instance also reaches this line
-    // but exits through the single-instance plugin before any sidecar is spawned.
-    let sidecar_port = free_port();
+    // Resolve ownership BEFORE the app is built so the webview CSP is pinned to the actual
+    // station port. Spawn remains the default; attach is explicit and requires STARNET_PORT.
+    let sidecar_mode =
+        external_sidecar::DesktopSidecarMode::from_process_env().unwrap_or_else(|error| {
+            eprintln!("StarNet desktop sidecar configuration error: {error}");
+            std::process::exit(2);
+        });
+    let sidecar_port = sidecar_mode.fixed_port().unwrap_or_else(free_port);
     pin_config_csp(&mut context.config_mut().app.security.csp, sidecar_port);
     tauri::Builder::default()
         // A second launch should focus the running window, not spin up a 2nd sidecar. Registered FIRST per
@@ -5019,20 +5065,35 @@ fn main() {
         .setup(move |app| {
             let root = project_root(app.handle());
             let port = sidecar_port; // the port the CSP was pinned to in main()
-            let ipc_token = uuid::Uuid::new_v4().to_string();
-            // per-launch API token: shared with the sidecar via env (it reads SKYNET_API_TOKEN) AND injected
-            // into the bundled webview below, so the desktop UI never has to fetch the token over an open route.
-            let api_token = uuid::Uuid::new_v4().to_string();
+            let sidecar_ownership = sidecar_mode.ownership();
+            let ipc_token = if sidecar_ownership.is_desktop() {
+                uuid::Uuid::new_v4().to_string()
+            } else {
+                String::new()
+            };
+            // A desktop-owned launch creates the token it shares with its child. Attach mode instead
+            // discovers the already-running station token through StarNet's same-user bootstrap page,
+            // exactly like the CLI/MCP/ACP clients; v0.13.3 peer-owner checks remain authoritative.
+            let api_token = if sidecar_ownership.is_external() {
+                external_sidecar::discover_token(port, Duration::from_secs(8))
+                    .map_err(std::io::Error::other)?
+            } else {
+                uuid::Uuid::new_v4().to_string()
+            };
             let startup_log = startup_log_path(app.handle());
             let workspaces = workspace_path(app.handle());
             let lifecycle_preferences_path = lifecycle_preferences_path(app.handle());
             let lifecycle_preferences = load_lifecycle_preferences(&lifecycle_preferences_path);
             let start_minimized = lifecycle_preferences.start_minimized;
-            let migrated_workspaces = migrate_workspace_data(
-                &workspaces,
-                &legacy_workspace_paths(&root, &workspaces),
-                &startup_log,
-            );
+            let migrated_workspaces = if sidecar_ownership.is_desktop() {
+                migrate_workspace_data(
+                    &workspaces,
+                    &legacy_workspace_paths(&root, &workspaces),
+                    &startup_log,
+                )
+            } else {
+                None
+            };
             log_startup(
                 &startup_log,
                 format!(
@@ -5047,12 +5108,12 @@ fn main() {
                     lifecycle_preferences.close_to_tray
                 ),
             );
-            // One-time: lift any plaintext channel bot tokens into the keychain and strip them from the file,
-            // BEFORE spawning the sidecar so the injected SKYNET_<ID>_TOKEN env reflects the migrated tokens.
-            migrate_channel_tokens_from_plaintext(&workspaces);
-            // Same one-time sweep for the cloud device token — this is what upgrades an already
-            // linked station from a plaintext token to a keychain one, with no user action.
-            migrate_credits_token_from_plaintext(&workspaces);
+            // Credential migrations mutate the desktop-owned workspace and therefore never run in attach mode.
+            // The external station remains the authority for its own mutable state and credential lifecycle.
+            if sidecar_ownership.is_desktop() {
+                migrate_channel_tokens_from_plaintext(&workspaces);
+                migrate_credits_token_from_plaintext(&workspaces);
+            }
             let state = AppState {
                 port,
                 app_version: app.package_info().version.to_string(),
@@ -5061,6 +5122,7 @@ fn main() {
                 root,
                 workspaces,
                 startup_log,
+                sidecar_ownership,
                 sidecar: Mutex::new(None),
                 keep_awake: Mutex::new(KeepAwakeState::new()),
                 lifecycle_preferences_path,
@@ -5074,29 +5136,33 @@ fn main() {
                 webview_recovery: webview_recovery::RecoveryBudget::default(),
                 main_window_built: AtomicBool::new(false),
             };
-            // Before spawning OUR sidecar: terminate any orphan sidecars left behind by a
-            // hard-killed previous shell (Drop/ExitRequested never ran there). Multiple live
-            // sidecars on one WORKSPACES dir violate the one-sidecar invariant and burn each
-            // other's rotating Codex OAuth refresh tokens. Scoped strictly to processes whose
-            // image path IS our bundled node runtime; fail-open, never blocks startup.
-            reap_orphan_sidecars(&node_binary(&state.root), &state.startup_log);
-            // Bring the sidecar up before starting background supervision. Cancel drops
-            // the owned state and child, before a guardian or hidden window can be created.
-            // A setup Err becomes a panic in Tauri, and release builds use panic = "abort" — a user
-            // pressing Cancel used to "crash" with 0xC0000409. Stop the child ourselves and exit cleanly.
-            if !spawn_sidecar_with_retry(app.handle(), &state) {
-                state.shutting_down.store(true, Ordering::SeqCst);
-                state.kill_sidecar();
-                log_startup(&state.startup_log, "startup: cancelled by user; exiting cleanly");
-                drop(state);
-                std::process::exit(0);
+            let owns_sidecar = state.sidecar_ownership.is_desktop();
+            if owns_sidecar {
+                // Before spawning OUR sidecar: terminate any orphan sidecars left behind by a
+                // hard-killed previous shell. Never reap in attach mode: that station belongs to its supervisor.
+                reap_orphan_sidecars(&node_binary(&state.root), &state.startup_log);
+                // Bring the owned sidecar up before starting background supervision.
+                if !spawn_sidecar_with_retry(app.handle(), &state) {
+                    state.shutting_down.store(true, Ordering::SeqCst);
+                    state.kill_sidecar();
+                    log_startup(&state.startup_log, "startup: cancelled by user; exiting cleanly");
+                    drop(state);
+                    std::process::exit(0);
+                }
+            } else {
+                log_startup(
+                    &state.startup_log,
+                    format!("startup: attached to externally managed StarNet station on 127.0.0.1:{}", state.port),
+                );
             }
             app.manage(state);
             app.manage(PendingUpdate(Mutex::new(None)));
             app.manage(hud_mode::HudState::default());
 
-            // Respawn the sidecar if it crashes while the window is open (see spawn_guardian).
-            spawn_guardian(app.handle().clone());
+            // Only a child owned by this shell may be respawned by its crash guardian.
+            if owns_sidecar {
+                spawn_guardian(app.handle().clone());
+            }
 
             // ---- Lane 4D: tray supervisor ----
             // The tray is the visible owner of the background-lifecycle contract. Open reveals the window; the
