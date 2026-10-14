@@ -110,6 +110,7 @@ const lineage = require('../sidecar/workspace-lineage.js');
   A.ok(!none.ok && /--model/.test(none.error), 'no model anywhere → an actionable error');
   const body = core.buildRunBody(d, 'do it', { cwd: '/proj' });
   A.eq(body.messages[0].role + ':' + body.messages[0].content, 'user:do it', 'one user message');
+  A.eq(body.isTask, true, 'headless run is task work so placed tools are available');
   A.eq(body.placed.map(p => p.objectType).join(','), 'computer,cabinet,workbench,dish,notebook', 'the headless coding office is placed');
   A.eq(body.projectRoot, '/proj', '--cwd rides as projectRoot');
   A.ok(!('projectRoot' in core.buildRunBody(d, 'x', {})), 'no cwd → no projectRoot');

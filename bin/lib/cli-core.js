@@ -241,6 +241,7 @@ function buildRunBody(sel, prompt, opts) {
     model: sel.model,
     provider: sel.provider,
     agentId: sel.agentId,
+    isTask: true,
     messages: [{ role: 'user', content: String(prompt == null ? '' : prompt) }],
     placed: HEADLESS_PLACED.map(p => Object.assign({}, p))
   };
