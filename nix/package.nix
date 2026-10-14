@@ -23,9 +23,8 @@ buildNpmPackage rec {
 
   nodejs = nodejs_22;
 
-  # Fixed from GitHub Actions against this dependency graph. The v0.13.3
-  # security release changes package metadata but not npm dependencies.
-  npmDepsHash = "sha256-u1GWHAC8CGxwg6KIqwQLxudWRkA0HXarla/JP3nXLe8=";
+  # Fixed from GitHub Actions against the v0.13.3 package-lock dependency graph.
+  npmDepsHash = "sha256-88utj+FGlgA4PgA4I/jDgogSz6gXmKjyYnUSB+azZI8=";
 
   # Keep the Nix build network-pure. CPU ONNX remains available from the npm
   # closure; optional CUDA/TensorRT provider downloads are intentionally skipped.
