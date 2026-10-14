@@ -91,10 +91,43 @@
             node ${script}
             touch "$out"
           '';
+
+          # The desktop shell must ship exactly the resources the Rust runtime
+          # resolves beside its executable (sidecar, frontend, shared,
+          # node_modules, externalBin node) and must share the runtime
+          # package's mutable-free closure instead of copying a second,
+          # divergent dependency tree.
+          desktopClosure = pkgs.runCommand "starnet-desktop-closure" { } ''
+            set -eu
+            bin="${starnet-desktop}/bin"
+            test -x "$bin/starnet-desktop" || { echo "FAIL: starnet-desktop executable missing"; exit 1; }
+            for resource in sidecar frontend shared node_modules; do
+              test -e "$bin/$resource" || { echo "FAIL: required resource $resource missing"; exit 1; }
+            done
+            shopt -s nullglob
+            nodes=("$bin"/binaries/node-*)
+            test ''${#nodes[@]} -gt 0 || { echo "FAIL: externalBin node-<triple> missing"; exit 1; }
+            for node in "''${nodes[@]}"; do
+              test -x "$node" || { echo "FAIL: externalBin $node not executable"; exit 1; }
+            done
+            runtime_root="${starnet}/lib/starnet"
+            for resource in sidecar frontend shared node_modules; do
+              desktop_real="$(readlink -f "$bin/$resource")"
+              runtime_real="$(readlink -f "$runtime_root/$resource")"
+              test "$desktop_real" = "$runtime_real" || {
+                echo "FAIL: $resource diverges between desktop and runtime closure"
+                echo "  desktop: $desktop_real"
+                echo "  runtime: $runtime_real"
+                exit 1
+              }
+            done
+            touch "$out"
+          '';
         in
         {
           package = starnet;
           desktop = starnet-desktop;
+          desktop-closure = desktopClosure;
           home-manager-module = moduleCheck;
           cli-unit = nodeCheck "starnet-cli-unit" "test/cli.test.js";
           desktop-voice-bundle = nodeCheck "starnet-desktop-voice-bundle" "test/desktop-voice-bundle.test.js";
