@@ -5107,7 +5107,9 @@ fn main() {
                     &startup_log,
                 )
             } else {
-                None
+                // Attach mode never migrates the external station's workspace;
+                // the empty vec keeps the startup log honest about that.
+                Vec::new()
             };
             log_startup(
                 &startup_log,
