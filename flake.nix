@@ -79,10 +79,22 @@
             pkgs.runCommand "starnet-home-manager-module-eval" { } ''
               touch "$out"
             '';
+
+          nodeCheck = name: script: pkgs.runCommand name {
+            nativeBuildInputs = [ pkgs.nodejs_22 ];
+          } ''
+            export HOME="$TMPDIR/home"
+            mkdir -p "$HOME"
+            cd ${self}
+            node ${script}
+            touch "$out"
+          '';
         in
         {
           package = starnet;
           home-manager-module = moduleCheck;
+          cli-unit = nodeCheck "starnet-cli-unit" "test/cli.test.js";
+          desktop-voice-bundle = nodeCheck "starnet-desktop-voice-bundle" "test/desktop-voice-bundle.test.js";
         });
 
       overlays.default = final: _prev: {
